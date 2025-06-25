@@ -1,0 +1,245 @@
+name: PR 라벨 자동 등록
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파일 변경 기반 라벨 추가
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            // 라벨 규칙 정의
+            const labelRules = {
+              'backend': {
+                pattern: /^backend\//,
+                color: '0052cc',
+                description: '백엔드 관련 변경'
+              },
+              'frontend': {
+                pattern: /^frontend\//,
+                color: '1d76db', 
+                description: '프론트엔드 관련 변경'
+              },
+              'documentation': {
+                pattern: /\.(md|rst|txt)$/i,
+                color: '0075ca',
+                description: '문서 관련 변경'
+              },
+              'tests': {
+                pattern: /(test|spec)/i,
+                color: '2ea44f',
+                description: '테스트 관련 변경'
+              },
+              'configuration': {
+                pattern: /\.(yml|yaml|json|toml|ini|env|config)$/i,
+                color: 'f9d0c4',
+                description: '설정 파일 변경'
+              },
+              'dependencies': {
+                pattern: /(requirements\.txt|package\.json|Pipfile|poetry\.lock|package-lock\.json)/i,
+                color: 'e99695',
+                description: '의존성 변경'
+              },
+              'docker': {
+                pattern: /(Dockerfile|docker-compose|\.dockerignore)/i,
+                color: '0366d6',
+                description: 'Docker 관련 변경'
+              },
+              'github-actions': {
+                pattern: /^\.github\//,
+                color: '000000',
+                description: 'GitHub Actions 관련 변경'
+              }
+            };
+
+            // PR 크기 라벨
+            const sizeLabels = {
+              'size/XS': { max: 10, color: '00ff00' },
+              'size/S': { max: 30, color: '7cfc00' },
+              'size/M': { max: 100, color: 'ffff00' },
+              'size/L': { max: 500, color: 'ffa500' },
+              'size/XL': { max: Infinity, color: 'ff0000' }
+            };
+
+            // 감지된 라벨들
+            const labelsToAdd = new Set();
+
+            // 파일 변경 기반 라벨 감지
+            files.forEach(file => {
+              Object.entries(labelRules).forEach(([label, rule]) => {
+                if (rule.pattern.test(file.filename)) {
+                  labelsToAdd.add(label);
+                }
+              });
+            });
+
+            // PR 크기 계산
+            const totalChanges = files.reduce((sum, file) => sum + file.changes, 0);
+            Object.entries(sizeLabels).forEach(([label, config]) => {
+              if (totalChanges <= config.max) {
+                labelsToAdd.add(label);
+                return false; // 첫 번째 매치에서 멈춤
+              }
+            });
+
+            // PR 제목 기반 라벨 감지
+            const title = pr.title.toLowerCase();
+            const titleLabels = {
+              'bug': /\b(fix|bug|hotfix|patch)\b/,
+              'enhancement': /\b(feat|feature|add|implement)\b/,
+              'refactor': /\b(refactor|cleanup|improve)\b/,
+              'breaking-change': /\b(breaking|major)\b/,
+              'urgent': /\b(urgent|critical|hotfix)\b/,
+              'security': /\b(security|vulnerability|auth)\b/
+            };
+
+            Object.entries(titleLabels).forEach(([label, pattern]) => {
+              if (pattern.test(title)) {
+                labelsToAdd.add(label);
+              }
+            });
+
+            // PR 본문 기반 라벨 감지
+            const body = (pr.body || '').toLowerCase();
+            if (body.includes('breaking change') || body.includes('브레이킹 체인지')) {
+              labelsToAdd.add('breaking-change');
+            }
+            if (body.includes('work in progress') || body.includes('wip')) {
+              labelsToAdd.add('work-in-progress');
+            }
+
+            // 기존 라벨 확인
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const currentLabelNames = new Set(currentLabels.map(label => label.name));
+
+            // 새로운 라벨만 추가
+            const newLabels = Array.from(labelsToAdd).filter(label => !currentLabelNames.has(label));
+
+            if (newLabels.length > 0) {
+              // 라벨이 존재하는지 확인하고 없으면 생성
+              for (const labelName of newLabels) {
+                try {
+                  await github.rest.issues.getLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: labelName
+                  });
+                } catch (error) {
+                  if (error.status === 404) {
+                    // 라벨이 없으면 생성
+                    const labelConfig = labelRules[labelName] || sizeLabels[labelName];
+                    const color = labelConfig?.color || 'f29513';
+                    const description = labelConfig?.description || `${labelName} 관련`;
+
+                    try {
+                      await github.rest.issues.createLabel({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        name: labelName,
+                        color: color,
+                        description: description
+                      });
+                      console.log(`라벨 생성: ${labelName}`);
+                    } catch (createError) {
+                      console.error(`라벨 생성 실패 (${labelName}):`, createError);
+                    }
+                  }
+                }
+              }
+
+              // 라벨 추가
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: newLabels
+              });
+
+              // 라벨 추가 댓글 작성
+              const labelList = newLabels.map(label => `\`${label}\``).join(', ');
+              const commentBody = `
+              ## 🏷️ 라벨 자동 추가 완료
+
+              다음 라벨이 자동으로 추가되었습니다: ${labelList}
+
+              ### 추가 기준
+              - **파일 변경**: ${Array.from(labelsToAdd).filter(l => Object.keys(labelRules).includes(l)).join(', ') || '없음'}
+              - **PR 크기**: ${Array.from(labelsToAdd).filter(l => l.startsWith('size/')).join(', ') || '없음'}
+              - **제목 분석**: ${Array.from(labelsToAdd).filter(l => Object.keys(titleLabels).includes(l)).join(', ') || '없음'}
+
+              **총 변경 라인 수**: ${totalChanges}줄
+
+              ---
+              *라벨은 파일 변경, PR 크기, 제목을 기반으로 자동 생성되었습니다.*
+              `;
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: commentBody
+              });
+            }
+
+      - name: Draft PR 라벨 관리
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const isDraft = pr.draft;
+            const draftLabel = 'draft';
+
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const hasLabel = labels.some(label => label.name === draftLabel);
+
+            if (isDraft && !hasLabel) {
+              // Draft PR에 draft 라벨 추가
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [draftLabel]
+              });
+            } else if (!isDraft && hasLabel) {
+              // Ready for review로 변경 시 draft 라벨 제거
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: draftLabel
+              });
+            }

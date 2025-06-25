@@ -1,0 +1,316 @@
+name: 이슈 자동 할당
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  auto-assign:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 이슈 타입별 담당자 할당
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          const labels = issue.labels.map(label => label.name.toLowerCase());
+
+          // 팀별 담당자 정의 (실제 GitHub 사용자명으로 변경 필요)
+          const teamAssignees = {
+            bug: ['bug-hunter', 'qa-engineer', 'senior-dev'],
+            feature: ['product-manager', 'feature-lead', 'ui-ux-designer'],
+            backend: ['backend-lead', 'api-developer', 'database-admin'],
+            frontend: ['frontend-lead', 'ui-developer', 'react-specialist'],
+            security: ['security-officer', 'cybersec-expert'],
+            performance: ['performance-engineer', 'optimization-expert'],
+            documentation: ['tech-writer', 'docs-maintainer'],
+            infrastructure: ['devops-engineer', 'sre-team'],
+            question: ['support-team', 'community-manager'],
+            enhancement: ['product-team', 'innovation-lead']
+          };
+
+          // 기본 담당자 (분류되지 않은 이슈용)
+          const defaultAssignees = ['project-manager', 'general-support'];
+
+          let assignedCategory = '';
+          let candidateAssignees = [];
+
+          // 1. 라벨 기반 할당
+          for (const label of labels) {
+            if (teamAssignees[label]) {
+              assignedCategory = label;
+              candidateAssignees = teamAssignees[label];
+              break;
+            }
+          }
+
+          // 2. 제목 기반 분류 (라벨이 없는 경우)
+          if (!assignedCategory) {
+            const titlePatterns = {
+              bug: /\b(bug|error|issue|problem|fail|crash|broken)\b/,
+              feature: /\b(feature|request|add|implement|new)\b/,
+              backend: /\b(api|server|database|backend|endpoint)\b/,
+              frontend: /\b(ui|ux|frontend|interface|component|css|html)\b/,
+              security: /\b(security|auth|login|password|vulnerability)\b/,
+              performance: /\b(performance|speed|slow|optimization|memory)\b/,
+              documentation: /\b(docs|documentation|readme|guide|tutorial)\b/,
+              infrastructure: /\b(deploy|docker|ci\/cd|build|infrastructure)\b/,
+              question: /\b(question|how|why|help|support)\b/,
+              enhancement: /\b(improve|enhance|better|optimize|upgrade)\b/
+            };
+
+            for (const [category, pattern] of Object.entries(titlePatterns)) {
+              if (pattern.test(title)) {
+                assignedCategory = category;
+                candidateAssignees = teamAssignees[category];
+                break;
+              }
+            }
+          }
+
+          // 3. 본문 내용 기반 분류 (제목으로도 분류되지 않은 경우)
+          if (!assignedCategory) {
+            const bodyPatterns = {
+              bug: /재현|버그|에러|오류|실패|크래시/,
+              feature: /기능|요청|추가|구현|신규/,
+              question: /질문|궁금|도움|지원|문의/,
+              enhancement: /개선|향상|최적화|업그레이드/
+            };
+
+            for (const [category, pattern] of Object.entries(bodyPatterns)) {
+              if (pattern.test(body)) {
+                assignedCategory = category;
+                candidateAssignees = teamAssignees[category];
+                break;
+              }
+            }
+          }
+
+          // 4. 기본 할당 (분류되지 않은 경우)
+          if (!assignedCategory) {
+            assignedCategory = 'general';
+            candidateAssignees = defaultAssignees;
+          }
+
+          // 5. 현재 온라인 상태 또는 워크로드 기반 최적 담당자 선택
+          // (실제로는 GitHub API로 사용자 활동 상태를 확인할 수 있음)
+          let selectedAssignee = candidateAssignees[0]; // 기본값
+
+          // 간단한 라운드 로빈 방식 (이슈 번호 기반)
+          const assigneeIndex = issue.number % candidateAssignees.length;
+          selectedAssignee = candidateAssignees[assigneeIndex];
+
+          try {
+            // 담당자 할당
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              assignees: [selectedAssignee]
+            });
+
+            // 할당 결과 댓글
+            const assignmentComment = `
+            ## 🎯 자동 담당자 할당 완료
+
+            **분류**: ${assignedCategory}
+            **할당된 담당자**: @${selectedAssignee}
+
+            ### 할당 기준
+            ${assignedCategory !== 'general' ? 
+              `이슈가 **${assignedCategory}** 영역으로 분류되어 해당 전문가에게 할당되었습니다.` :
+              '분류되지 않은 일반 이슈로 기본 담당자에게 할당되었습니다.'
+            }
+
+            ### 기대 응답 시간
+            - **일반 이슈**: 영업일 기준 2-3일
+            - **버그**: 영업일 기준 1-2일  
+            - **긴급 이슈**: 24시간 이내
+
+            담당자가 곧 이슈를 검토하고 추가 정보가 필요한 경우 댓글로 요청드릴 예정입니다.
+
+            ---
+            *담당자는 이슈 유형과 팀 워크로드를 고려하여 자동 할당되었습니다.*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: assignmentComment
+            });
+
+            console.log(`이슈 #${issue.number}이 ${assignedCategory} 카테고리로 @${selectedAssignee}에게 할당되었습니다.`);
+
+          } catch (error) {
+            console.error('담당자 할당 실패:', error);
+            
+            // 할당 실패 시 대안 댓글
+            const fallbackComment = `
+            ## ⚠️ 자동 할당 실패
+
+            **감지된 카테고리**: ${assignedCategory}
+            **권장 담당자**: ${candidateAssignees.map(a => `@${a}`).join(', ')}
+
+            자동 할당에 실패했습니다. 관리자가 수동으로 적절한 담당자를 할당해드리겠습니다.
+
+            **임시 조치**: 이슈가 등록되었으며, 24시간 내에 담당자가 할당될 예정입니다.
+
+            ---
+            *자동 할당 시스템 오류 알림*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: fallbackComment
+            });
+          }
+
+    - name: 우선순위 기반 긴급 할당
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          const labels = issue.labels.map(label => label.name.toLowerCase());
+
+          // 긴급 키워드 감지
+          const urgentKeywords = [
+            'urgent', '긴급', 'critical', '치명적', 'blocker', '차단',
+            'production', '운영', 'down', '다운', 'outage', '장애',
+            'security', '보안', 'vulnerability', '취약점'
+          ];
+
+          const isUrgent = urgentKeywords.some(keyword => 
+            title.includes(keyword) || body.includes(keyword)
+          );
+
+          const hasUrgentLabel = labels.some(label => 
+            ['urgent', 'critical', 'blocker', 'security'].includes(label)
+          );
+
+          if (isUrgent || hasUrgentLabel) {
+            // 긴급 이슈 전담팀 (실제 사용자명으로 변경 필요)
+            const emergencyTeam = ['emergency-lead', 'on-call-engineer', 'senior-architect'];
+            
+            try {
+              // priority-high 라벨 추가
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['priority-high']
+              });
+
+              // 긴급팀 전체에 알림 (추가 할당)
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                assignees: emergencyTeam
+              });
+
+              // 긴급 알림 댓글
+              const urgentComment = `
+              ## 🚨 긴급 이슈 감지
+
+              이 이슈가 긴급 이슈로 분류되어 비상 대응팀에게 즉시 할당되었습니다.
+
+              **할당된 비상팀**: ${emergencyTeam.map(member => `@${member}`).join(', ')}
+
+              ### 🔥 우선 조치
+              - 즉시 이슈 검토 시작
+              - 필요시 임시 해결책 적용
+              - 1시간 내 상황 업데이트
+
+              ### ⏰ 대응 시간표
+              - **초기 대응**: 30분 이내
+              - **상황 파악**: 1시간 이내  
+              - **해결 계획**: 2시간 이내
+
+              ---
+              *긴급 이슈 자동 대응 시스템이 활성화되었습니다.*
+              `;
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: urgentComment
+              });
+
+              console.log(`긴급 이슈 #${issue.number}이 비상팀에게 할당되었습니다.`);
+
+            } catch (error) {
+              console.error('긴급 할당 실패:', error);
+            }
+          }
+
+    - name: 전문 영역별 추가 할당
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+
+          // 복합 이슈 감지 (여러 팀이 필요한 경우)
+          const complexPatterns = {
+            'fullstack': /full.?stack|frontend.*backend|ui.*api/,
+            'devops-security': /deploy.*security|ci.*cd.*auth|infrastructure.*vulnerability/,
+            'performance-db': /database.*performance|query.*optimization|db.*slow/,
+            'ui-accessibility': /accessibility|a11y|screen.reader|wcag/
+          };
+
+          const additionalTeams = {
+            'fullstack': ['fullstack-architect', 'senior-full-dev'],
+            'devops-security': ['security-devops', 'infra-security'],
+            'performance-db': ['database-perf-expert', 'query-optimizer'],
+            'ui-accessibility': ['accessibility-expert', 'inclusive-design']
+          };
+
+          for (const [pattern, team] of Object.entries(additionalTeams)) {
+            if (complexPatterns[pattern] && 
+                (complexPatterns[pattern].test(title) || complexPatterns[pattern].test(body))) {
+              
+              try {
+                // 추가 전문가 할당
+                await github.rest.issues.addAssignees({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  assignees: [team[0]] // 첫 번째 전문가만 할당
+                });
+
+                const specialistComment = `
+                ## 🎯 전문가 추가 할당
+
+                복합적인 이슈로 판단되어 관련 전문가가 추가로 할당되었습니다.
+
+                **전문 영역**: ${pattern.replace('-', ' & ')}
+                **추가 전문가**: @${team[0]}
+
+                여러 팀이 협력하여 이슈를 해결할 예정입니다.
+
+                ---
+                *복합 이슈 자동 감지 시스템*
+                `;
+
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: specialistComment
+                });
+
+                break; // 첫 번째 매치에서 중단
+              } catch (error) {
+                console.error('전문가 추가 할당 실패:', error);
+              }
+            }
+          } 

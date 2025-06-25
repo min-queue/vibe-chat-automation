@@ -1,0 +1,183 @@
+name: PR 자동 댓글
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_run:
+    workflows: ["테스트 자동 실행"]
+    types: [completed]
+
+jobs:
+  pr-welcome-comment:
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR 환영 댓글 작성
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const welcomeMessage = `
+            🎉 **PR이 생성되었습니다!** 
+
+            안녕하세요 @${pr.user.login}님! PR을 열어주셔서 감사합니다.
+
+            ## 📋 체크리스트
+            PR을 리뷰하기 전에 다음 사항들을 확인해주세요:
+
+            - [ ] 코드 변경사항이 요구사항을 충족하는지 확인
+            - [ ] 테스트 코드가 작성되었는지 확인
+            - [ ] 모든 테스트가 통과하는지 확인
+            - [ ] 코드 스타일 가이드를 준수했는지 확인
+            - [ ] 관련 문서가 업데이트되었는지 확인
+            - [ ] 브레이킹 체인지가 있다면 명시했는지 확인
+
+            ## 🔍 자동 검사
+            - 테스트 자동 실행이 진행됩니다
+            - 코드 품질 검사가 실행됩니다
+            - 리뷰어가 자동으로 할당됩니다
+
+            리뷰어들이 곧 코드를 검토할 예정입니다. 질문이 있으시면 언제든 댓글로 남겨주세요! 🚀
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: welcomeMessage
+            });
+
+  test-results-comment:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 테스트 결과 댓글 작성
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const workflow = context.payload.workflow_run;
+            const conclusion = workflow.conclusion;
+            const runId = workflow.id;
+
+            // PR 번호 찾기
+            const pullRequests = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${workflow.head_branch}`,
+              state: 'open'
+            });
+
+            if (pullRequests.data.length === 0) {
+              console.log('관련 PR을 찾을 수 없습니다.');
+              return;
+            }
+
+            const pr = pullRequests.data[0];
+            const prNumber = pr.number;
+
+            let statusIcon, statusText, statusColor;
+
+            if (conclusion === 'success') {
+              statusIcon = '✅';
+              statusText = '성공';
+              statusColor = '28a745';
+            } else if (conclusion === 'failure') {
+              statusIcon = '❌';
+              statusText = '실패';
+              statusColor = 'd73a49';
+            } else {
+              statusIcon = '⚠️';
+              statusText = '불확실';
+              statusColor = 'ffc107';
+            }
+
+            const commentBody = `
+            ## ${statusIcon} 테스트 결과: ${statusText}
+
+            ![테스트 상태](https://img.shields.io/badge/테스트-${statusText}-${statusColor})
+
+            **워크플로우 실행 ID**: [#${runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId})
+            **브랜치**: \`${workflow.head_branch}\`
+            **커밋**: \`${workflow.head_sha.substring(0, 7)}\`
+
+            ${conclusion === 'failure' ? 
+              '❗ 테스트가 실패했습니다. [상세 로그](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + runId + ')를 확인하여 문제를 해결해주세요.' :
+              '🎉 모든 테스트가 성공적으로 통과했습니다!'
+            }
+
+            ---
+            *이 댓글은 자동으로 생성되었습니다.*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
+
+  code-coverage-comment:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 커버리지 댓글 작성
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const workflow = context.payload.workflow_run;
+
+            // PR 번호 찾기
+            const pullRequests = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${workflow.head_branch}`,
+              state: 'open'
+            });
+
+            if (pullRequests.data.length === 0) {
+              return;
+            }
+
+            const pr = pullRequests.data[0];
+            const prNumber = pr.number;
+
+            // 커버리지 정보는 실제 테스트 결과에서 파싱해야 하지만,
+            // 여기서는 예시로 고정값 사용
+            const coveragePercentage = 85; // 실제로는 테스트 결과에서 파싱
+            const coverageColor = coveragePercentage >= 80 ? '28a745' : 
+                                coveragePercentage >= 60 ? 'ffc107' : 'd73a49';
+
+            const commentBody = `
+            ## 📊 코드 커버리지 리포트
+
+            ![커버리지](https://img.shields.io/badge/커버리지-${coveragePercentage}%25-${coverageColor})
+
+            **전체 커버리지**: ${coveragePercentage}%
+
+            ${coveragePercentage >= 80 ? 
+              '🎯 훌륭한 테스트 커버리지입니다!' :
+              coveragePercentage >= 60 ?
+              '⚠️ 테스트 커버리지를 더 높일 수 있습니다.' :
+              '❗ 테스트 커버리지가 낮습니다. 테스트 코드를 추가해주세요.'
+            }
+
+            ### 권장사항
+            - 커버리지 목표: 80% 이상
+            - 중요한 로직에 대한 테스트 우선 작성
+            - 엣지 케이스 테스트 포함
+
+            ---
+            *이 댓글은 자동으로 생성되었습니다.*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });

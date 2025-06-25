@@ -1,0 +1,204 @@
+name: PR 자동 할당
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  assign-reviewers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 변경된 파일 분석 및 리뷰어 할당
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            // 팀별 리뷰어 정의 (실제 GitHub 사용자명으로 변경 필요)
+            const teamReviewers = {
+              backend: ['backend-lead', 'senior-backend-dev'],
+              frontend: ['frontend-lead', 'senior-frontend-dev'],
+              docs: ['tech-writer', 'docs-maintainer'],
+              tests: ['qa-lead', 'test-engineer'],
+              config: ['devops-lead', 'infrastructure-team'],
+              security: ['security-team', 'senior-dev']
+            };
+
+            // 기본 리뷰어 (모든 PR에 할당)
+            const defaultReviewers = ['tech-lead', 'senior-architect'];
+
+            // 변경된 파일을 기반으로 팀 결정
+            const assignedTeams = new Set();
+            const filePatterns = {
+              backend: /^backend\//,
+              frontend: /^frontend\//,
+              docs: /\.(md|rst|txt)$/i,
+              tests: /test|spec/i,
+              config: /\.(yml|yaml|json|toml|ini|env)$/i,
+              security: /(auth|security|crypto|password|token)/i
+            };
+
+            files.forEach(file => {
+              const filename = file.filename;
+              
+              Object.entries(filePatterns).forEach(([team, pattern]) => {
+                if (pattern.test(filename)) {
+                  assignedTeams.add(team);
+                }
+              });
+            });
+
+            // 할당할 리뷰어 목록 구성
+            let reviewersToAssign = [...defaultReviewers];
+
+            assignedTeams.forEach(team => {
+              if (teamReviewers[team]) {
+                reviewersToAssign.push(...teamReviewers[team]);
+              }
+            });
+
+            // 중복 제거 및 PR 작성자 제외
+            reviewersToAssign = [...new Set(reviewersToAssign)]
+              .filter(reviewer => reviewer !== pr.user.login);
+
+            // 최대 리뷰어 수 제한 (5명)
+            if (reviewersToAssign.length > 5) {
+              reviewersToAssign = reviewersToAssign.slice(0, 5);
+            }
+
+            // 리뷰어 할당
+            if (reviewersToAssign.length > 0) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  reviewers: reviewersToAssign
+                });
+
+                // 할당 결과 댓글 작성
+                const teamList = Array.from(assignedTeams).join(', ');
+                const reviewerList = reviewersToAssign.map(r => `@${r}`).join(', ');
+                
+                const commentBody = `
+                ## 👥 리뷰어 자동 할당 완료
+
+                **감지된 변경 영역**: ${teamList || '일반'}
+                **할당된 리뷰어**: ${reviewerList}
+
+                ### 할당 기준
+                ${Array.from(assignedTeams).map(team => 
+                  `- **${team}**: ${teamReviewers[team]?.join(', ') || '기본 리뷰어'}`
+                ).join('\n')}
+
+                ---
+                *리뷰어는 변경된 파일을 기반으로 자동 할당되었습니다.*
+                `;
+
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: commentBody
+                });
+
+              } catch (error) {
+                console.error('리뷰어 할당 실패:', error);
+                
+                // 실패 시 댓글로 알림
+                await github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `⚠️ 리뷰어 자동 할당에 실패했습니다. 수동으로 리뷰어를 할당해주세요.\n\n권장 리뷰어: ${reviewersToAssign.map(r => `@${r}`).join(', ')}`
+                });
+              }
+            }
+
+      - name: PR 작성자에게 할당
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // PR 작성자를 assignee로 설정
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              assignees: [context.payload.pull_request.user.login]
+            });
+
+  assign-based-on-codeowners:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: CODEOWNERS 기반 리뷰어 할당
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // CODEOWNERS 파일 확인
+            const codeownersPath = '.github/CODEOWNERS';
+            if (!fs.existsSync(codeownersPath)) {
+              console.log('CODEOWNERS 파일이 없습니다.');
+              return;
+            }
+
+            const codeowners = fs.readFileSync(codeownersPath, 'utf8');
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            // CODEOWNERS 파싱하여 파일별 소유자 찾기
+            const ownersToAssign = new Set();
+
+            codeowners.split('\n').forEach(line => {
+              line = line.trim();
+              if (line && !line.startsWith('#')) {
+                const [pattern, ...owners] = line.split(/\s+/);
+                
+                files.forEach(file => {
+                  // 간단한 패턴 매칭 (glob 패턴 지원 개선 가능)
+                  if (file.filename.includes(pattern.replace('*', ''))) {
+                    owners.forEach(owner => {
+                      if (owner.startsWith('@')) {
+                        ownersToAssign.add(owner.substring(1));
+                      }
+                    });
+                  }
+                });
+              }
+            });
+
+            if (ownersToAssign.size > 0) {
+              const reviewersArray = Array.from(ownersToAssign);
+              
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: reviewersArray
+              });
+
+              console.log(`CODEOWNERS 기반으로 ${reviewersArray.join(', ')} 리뷰어를 할당했습니다.`);
+            }

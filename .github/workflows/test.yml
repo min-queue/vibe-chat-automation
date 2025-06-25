@@ -1,0 +1,97 @@
+name: 테스트 자동 실행
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11]
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 환경 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 의존성 캐시
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 백엔드 의존성 설치
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 프론트엔드 의존성 설치
+        run: |
+          cd frontend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 백엔드 테스트 실행
+        run: |
+          cd backend
+          python -m pytest tests/ -v --cov=app --cov-report=xml --cov-report=html
+
+      - name: 테스트 커버리지 업로드
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+
+      - name: 테스트 결과 아티팩트 업로드
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: |
+            backend/htmlcov/
+            backend/coverage.xml
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 환경 설정
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: 린터 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort mypy
+
+      - name: 코드 포맷팅 검사 (Black)
+        run: |
+          black --check backend/ frontend/
+
+      - name: 임포트 정렬 검사 (isort)
+        run: |
+          isort --check-only backend/ frontend/
+
+      - name: 코드 스타일 검사 (flake8)
+        run: |
+          flake8 backend/ frontend/ --max-line-length=88 --extend-ignore=E203,W503
+
+      - name: 타입 검사 (mypy)
+        run: |
+          mypy backend/app/ --ignore-missing-imports

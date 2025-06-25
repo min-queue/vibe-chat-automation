@@ -1,0 +1,276 @@
+name: PR 자동 코드 리뷰
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  auto-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 코드 품질 분석 및 리뷰 댓글 생성
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            // 코드 분석 결과
+            let reviewComments = [];
+            let overallScore = 100;
+            let issues = {
+              critical: [],
+              warning: [],
+              suggestion: []
+            };
+
+            // 파일별 코드 분석
+            for (const file of files) {
+              if (file.status === 'removed') continue;
+
+              const filename = file.filename;
+              const patch = file.patch || '';
+
+              // Python 파일 분석
+              if (filename.endsWith('.py')) {
+                // 긴 함수 감지
+                const functionMatches = patch.match(/def \w+\([^)]*\):/g) || [];
+                const lines = patch.split('\n');
+                
+                if (lines.length > 50) {
+                  issues.warning.push(`${filename}: 파일이 너무 큽니다 (${lines.length}줄). 함수를 분리하는 것을 고려해보세요.`);
+                  overallScore -= 5;
+                }
+
+                // TODO/FIXME 주석 감지
+                const todoMatches = patch.match(/TODO|FIXME|XXX/gi) || [];
+                if (todoMatches.length > 0) {
+                  issues.suggestion.push(`${filename}: ${todoMatches.length}개의 TODO/FIXME 주석이 있습니다. 이슈로 등록하는 것을 고려해보세요.`);
+                  overallScore -= 2;
+                }
+
+                // 하드코딩된 값 감지
+                const hardcodedMatches = patch.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|http:\/\/|https:\/\/[^\s"']+/g) || [];
+                if (hardcodedMatches.length > 0) {
+                  issues.warning.push(`${filename}: 하드코딩된 URL이나 IP 주소가 감지되었습니다. 환경 변수 사용을 고려해보세요.`);
+                  overallScore -= 10;
+                }
+
+                // 긴 줄 감지
+                const longLines = lines.filter(line => line.length > 88);
+                if (longLines.length > 0) {
+                  issues.suggestion.push(`${filename}: ${longLines.length}개의 긴 줄이 있습니다 (88자 초과). 가독성을 위해 줄 나누기를 고려해보세요.`);
+                  overallScore -= 3;
+                }
+              }
+
+              // 보안 관련 패턴 감지
+              const securityPatterns = [
+                { pattern: /password\s*=\s*["'][^"']+["']/i, message: '하드코딩된 비밀번호가 감지되었습니다' },
+                { pattern: /api[_-]?key\s*=\s*["'][^"']+["']/i, message: '하드코딩된 API 키가 감지되었습니다' },
+                { pattern: /secret\s*=\s*["'][^"']+["']/i, message: '하드코딩된 시크릿이 감지되었습니다' },
+                { pattern: /token\s*=\s*["'][^"']+["']/i, message: '하드코딩된 토큰이 감지되었습니다' }
+              ];
+
+              securityPatterns.forEach(({ pattern, message }) => {
+                if (pattern.test(patch)) {
+                  issues.critical.push(`${filename}: ${message}. 환경 변수나 시크릿 관리 도구를 사용하세요.`);
+                  overallScore -= 20;
+                }
+              });
+
+              // 테스트 파일 분석
+              if (filename.includes('test') || filename.includes('spec')) {
+                const assertMatches = patch.match(/assert|expect|should/gi) || [];
+                if (assertMatches.length === 0 && patch.includes('def test_')) {
+                  issues.warning.push(`${filename}: 테스트 함수에 assertion이 없을 수 있습니다.`);
+                  overallScore -= 15;
+                }
+              }
+            }
+
+            // 전체 PR 분석
+            const totalChanges = files.reduce((sum, file) => sum + (file.changes || 0), 0);
+            const addedLines = files.reduce((sum, file) => sum + (file.additions || 0), 0);
+            const deletedLines = files.reduce((sum, file) => sum + (file.deletions || 0), 0);
+
+            // PR 크기 평가
+            if (totalChanges > 500) {
+              issues.warning.push('PR이 너무 큽니다. 작은 단위로 나누는 것을 고려해보세요.');
+              overallScore -= 10;
+            }
+
+            // 테스트 파일 포함 여부 확인
+            const hasTestFiles = files.some(file => 
+              file.filename.includes('test') || 
+              file.filename.includes('spec') ||
+              file.filename.startsWith('tests/')
+            );
+
+            const hasCodeChanges = files.some(file => 
+              !file.filename.includes('test') && 
+              !file.filename.includes('spec') &&
+              !file.filename.includes('.md') &&
+              file.status !== 'removed'
+            );
+
+            if (hasCodeChanges && !hasTestFiles) {
+              issues.warning.push('코드 변경이 있지만 테스트 파일이 포함되지 않았습니다.');
+              overallScore -= 15;
+            }
+
+            // 리뷰 댓글 생성
+            let reviewSummary = `## 🤖 자동 코드 리뷰 결과\n\n`;
+
+            // 점수 표시
+            const scoreColor = overallScore >= 90 ? '🟢' : overallScore >= 70 ? '🟡' : '🔴';
+            reviewSummary += `**전체 점수**: ${scoreColor} ${overallScore}/100\n\n`;
+
+            // 통계
+            reviewSummary += `### 📊 변경 통계\n`;
+            reviewSummary += `- **총 변경 파일**: ${files.length}개\n`;
+            reviewSummary += `- **총 변경 라인**: ${totalChanges}줄 (+${addedLines}, -${deletedLines})\n`;
+            reviewSummary += `- **테스트 파일 포함**: ${hasTestFiles ? '✅' : '❌'}\n\n`;
+
+            // 이슈 리포트
+            if (issues.critical.length > 0) {
+              reviewSummary += `### 🚨 Critical Issues\n`;
+              issues.critical.forEach(issue => {
+                reviewSummary += `- ❗ ${issue}\n`;
+              });
+              reviewSummary += `\n`;
+            }
+
+            if (issues.warning.length > 0) {
+              reviewSummary += `### ⚠️ Warnings\n`;
+              issues.warning.forEach(issue => {
+                reviewSummary += `- ⚠️ ${issue}\n`;
+              });
+              reviewSummary += `\n`;
+            }
+
+            if (issues.suggestion.length > 0) {
+              reviewSummary += `### 💡 Suggestions\n`;
+              issues.suggestion.forEach(issue => {
+                reviewSummary += `- 💡 ${issue}\n`;
+              });
+              reviewSummary += `\n`;
+            }
+
+            // 권장사항
+            reviewSummary += `### 🎯 권장사항\n`;
+            if (overallScore >= 90) {
+              reviewSummary += `- 🎉 훌륭한 코드 품질입니다!\n`;
+            } else {
+              reviewSummary += `- 📚 [코딩 스타일 가이드](https://github.com/psf/black) 참고\n`;
+              reviewSummary += `- 🧪 테스트 커버리지 향상 고려\n`;
+              reviewSummary += `- 📖 코드 문서화 강화\n`;
+            }
+
+            if (issues.critical.length > 0) {
+              reviewSummary += `- ⚠️ Critical 이슈를 우선 해결해주세요\n`;
+            }
+
+            reviewSummary += `\n---\n*이 리뷰는 자동으로 생성되었습니다. 추가 검토가 필요할 수 있습니다.*`;
+
+            // 댓글 작성
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: reviewSummary
+            });
+
+            // Critical 이슈가 있으면 changes_requested 리뷰 생성
+            if (issues.critical.length > 0) {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'REQUEST_CHANGES',
+                body: `Critical 보안 이슈가 발견되었습니다. 해결 후 재검토를 요청해주세요.\n\n${issues.critical.map(issue => `- ${issue}`).join('\n')}`
+              });
+            } else if (overallScore >= 80) {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'APPROVE',
+                body: `자동 코드 리뷰 통과! 점수: ${overallScore}/100`
+              });
+            }
+
+      - name: 코드 복잡도 분석
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            let complexityReport = `## 📈 코드 복잡도 분석\n\n`;
+
+            for (const file of files) {
+              if (!file.filename.endsWith('.py') || file.status === 'removed') continue;
+
+              const patch = file.patch || '';
+              const lines = patch.split('\n');
+              
+              // 순환 복잡도 간단 계산 (if, for, while, try, except 등)
+              const complexityKeywords = [
+                'if ', 'elif ', 'for ', 'while ', 'try:', 'except', 
+                'and ', 'or ', '&&', '||'
+              ];
+              
+              let complexity = 1; // 기본 복잡도
+              lines.forEach(line => {
+                complexityKeywords.forEach(keyword => {
+                  if (line.includes(keyword)) {
+                    complexity++;
+                  }
+                });
+              });
+
+              // 함수 개수 계산
+              const functionCount = (patch.match(/def \w+/g) || []).length;
+              
+              if (functionCount > 0) {
+                const avgComplexity = complexity / functionCount;
+                const complexityLevel = avgComplexity > 10 ? '🔴 높음' : 
+                                      avgComplexity > 5 ? '🟡 보통' : '🟢 낮음';
+                
+                complexityReport += `### ${file.filename}\n`;
+                complexityReport += `- **함수 수**: ${functionCount}\n`;
+                complexityReport += `- **순환 복잡도**: ${complexityLevel} (${avgComplexity.toFixed(1)})\n`;
+                
+                if (avgComplexity > 10) {
+                  complexityReport += `- ⚠️ 함수를 더 작은 단위로 분리하는 것을 고려해보세요\n`;
+                }
+                complexityReport += `\n`;
+              }
+            }
+
+            if (complexityReport !== `## 📈 코드 복잡도 분석\n\n`) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: complexityReport
+              });
+            }

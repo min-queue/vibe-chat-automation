@@ -1,0 +1,91 @@
+# CODEOWNERS 파일
+# 코드 변경 시 자동으로 리뷰어가 할당됩니다.
+# 패턴에 매칭되는 파일 변경 시 해당 팀/사용자가 리뷰어로 할당됩니다.
+
+# 전역 소유자 (모든 파일에 대한 기본 소유자)
+* @tech-lead @senior-architect
+
+# 백엔드 관련 파일들
+backend/ @backend-team @backend-lead
+backend/app/ @backend-lead @senior-backend-dev
+backend/tests/ @qa-team @backend-team
+backend/requirements.txt @backend-lead @devops-team
+
+# 프론트엔드 관련 파일들
+frontend/ @frontend-team @frontend-lead
+frontend/static/ @ui-team @frontend-lead
+frontend/templates/ @ui-team @frontend-lead
+
+# 설정 및 인프라 파일들
+.github/ @devops-team @infrastructure-team
+.github/workflows/ @devops-lead @cicd-team
+docker* @devops-team @infrastructure-team
+requirements.txt @devops-team @backend-team
+package.json @frontend-team @devops-team
+
+# 문서 파일들
+*.md @docs-team @tech-writer
+docs/ @docs-team @tech-writer @product-team
+README.md @tech-lead @docs-team
+
+# 보안 관련 파일들
+**/auth* @security-team @backend-team
+**/security* @security-team
+**/*auth* @security-team @backend-team
+**/*security* @security-team
+
+# 테스트 파일들
+**/test* @qa-team @test-engineer
+**/spec* @qa-team @test-engineer
+**/*test* @qa-team
+**/*spec* @qa-team
+
+# 데이터베이스 관련
+**/migrations/ @database-team @backend-lead
+**/models/ @database-team @backend-team
+**/*model* @database-team @backend-team
+
+# 설정 파일들
+*.yml @devops-team @infrastructure-team
+*.yaml @devops-team @infrastructure-team
+*.json @devops-team
+*.toml @devops-team
+*.ini @devops-team
+.env* @devops-team @security-team
+
+# Python 특화 파일들
+*.py @backend-team
+setup.py @backend-lead @devops-team
+pyproject.toml @backend-lead @devops-team
+
+# JavaScript/TypeScript 파일들
+*.js @frontend-team
+*.ts @frontend-team
+*.jsx @frontend-team
+*.tsx @frontend-team
+*.vue @frontend-team
+
+# 스타일 파일들
+*.css @ui-team @frontend-team
+*.scss @ui-team @frontend-team
+*.sass @ui-team @frontend-team
+*.less @ui-team @frontend-team
+
+# API 관련
+**/api/ @backend-team @api-team
+**/routers/ @backend-team @api-team
+**/endpoints/ @backend-team @api-team
+
+# 특수 파일들
+LICENSE @legal-team @tech-lead
+CHANGELOG.md @product-team @tech-lead
+CONTRIBUTING.md @community-team @tech-lead
+
+# 성능 관련
+**/*performance* @performance-team @backend-team
+**/*optimization* @performance-team
+
+# 모니터링 및 로깅
+**/*logging* @sre-team @devops-team
+**/*monitoring* @sre-team @devops-team
+**/*metrics* @sre-team @devops-team 

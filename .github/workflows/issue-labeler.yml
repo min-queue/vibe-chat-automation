@@ -1,0 +1,421 @@
+name: 이슈 라벨 자동 등록
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 이슈 내용 기반 라벨 자동 추가
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+
+          // 라벨 정의 및 생성 규칙
+          const labelDefinitions = {
+            // 이슈 타입 라벨
+            'bug': {
+              patterns: [
+                /\[bug\]/i, /bug/i, /버그/, /오류/, /에러/, /error/i, /fail/i, 
+                /crash/i, /broken/i, /문제/, /issue/i, /재현/
+              ],
+              color: 'd73a49',
+              description: '버그 리포트'
+            },
+            'feature': {
+              patterns: [
+                /\[feature\]/i, /feature/i, /기능/, /요청/, /request/i, 
+                /enhancement/i, /개선/, /추가/, /add/i, /implement/i, /신규/
+              ],
+              color: '0075ca',
+              description: '새로운 기능 요청'
+            },
+            'question': {
+              patterns: [
+                /\[question\]/i, /question/i, /질문/, /궁금/, /문의/, 
+                /help/i, /도움/, /support/i, /지원/, /how/i, /why/i
+              ],
+              color: 'd876e3',
+              description: '질문'
+            },
+            'documentation': {
+              patterns: [
+                /\[docs\]/i, /documentation/i, /문서/, /readme/i, /guide/i, 
+                /tutorial/i, /docs/i, /가이드/, /설명서/, /매뉴얼/
+              ],
+              color: '0075ca',
+              description: '문서 관련'
+            },
+
+            // 기술 영역 라벨
+            'backend': {
+              patterns: [
+                /backend/i, /api/i, /server/i, /database/i, /db/i, 
+                /endpoint/i, /백엔드/, /서버/, /데이터베이스/
+              ],
+              color: '1d76db',
+              description: '백엔드 관련'
+            },
+            'frontend': {
+              patterns: [
+                /frontend/i, /ui/i, /ux/i, /interface/i, /component/i, 
+                /css/i, /html/i, /javascript/i, /프론트엔드/, /화면/, /인터페이스/
+              ],
+              color: '0052cc',
+              description: '프론트엔드 관련'
+            },
+            'mobile': {
+              patterns: [
+                /mobile/i, /ios/i, /android/i, /app/i, /모바일/, /앱/
+              ],
+              color: 'f9d0c4',
+              description: '모바일 관련'
+            },
+
+            // 우선순위 라벨
+            'priority-high': {
+              patterns: [
+                /urgent/i, /긴급/, /critical/i, /치명적/, /blocker/i, 
+                /차단/, /high/i, /높음/, /중요/
+              ],
+              color: 'b60205',
+              description: '높은 우선순위'
+            },
+            'priority-medium': {
+              patterns: [
+                /medium/i, /보통/, /normal/i, /일반/
+              ],
+              color: 'fbca04',
+              description: '보통 우선순위'
+            },
+            'priority-low': {
+              patterns: [
+                /low/i, /낮음/, /minor/i, /사소/, /nice.to.have/i
+              ],
+              color: '0e8a16',
+              description: '낮은 우선순위'
+            },
+
+            // 특수 라벨
+            'security': {
+              patterns: [
+                /security/i, /보안/, /vulnerability/i, /취약점/, /auth/i, 
+                /인증/, /login/i, /password/i, /비밀번호/, /암호/
+              ],
+              color: 'b60205',
+              description: '보안 관련'
+            },
+            'performance': {
+              patterns: [
+                /performance/i, /성능/, /speed/i, /속도/, /slow/i, /느림/, 
+                /optimization/i, /최적화/, /memory/i, /메모리/
+              ],
+              color: 'c2e0c6',
+              description: '성능 관련'
+            },
+            'accessibility': {
+              patterns: [
+                /accessibility/i, /a11y/i, /접근성/, /screen.reader/i, 
+                /wcag/i, /장애인/, /시각장애/
+              ],
+              color: '7057ff',
+              description: '접근성 관련'
+            },
+            'testing': {
+              patterns: [
+                /test/i, /testing/i, /테스트/, /spec/i, /unit.test/i, 
+                /integration/i, /e2e/i, /qa/i
+              ],
+              color: '0e8a16',
+              description: '테스트 관련'
+            },
+
+            // 플랫폼 라벨
+            'windows': {
+              patterns: [/windows/i, /윈도우/, /win10/i, /win11/i],
+              color: 'c5def5',
+              description: 'Windows 플랫폼'
+            },
+            'macos': {
+              patterns: [/macos/i, /mac/i, /맥/, /osx/i],
+              color: 'c5def5',
+              description: 'macOS 플랫폼'
+            },
+            'linux': {
+              patterns: [/linux/i, /리눅스/, /ubuntu/i, /centos/i],
+              color: 'c5def5',
+              description: 'Linux 플랫폼'
+            },
+
+            // 작업 상태 라벨
+            'good first issue': {
+              patterns: [
+                /beginner/i, /초보/, /easy/i, /쉬운/, /first.issue/i, 
+                /newcomer/i, /신입/, /입문/
+              ],
+              color: '7057ff',
+              description: '초보자용 이슈'
+            },
+            'help wanted': {
+              patterns: [
+                /help.wanted/i, /도움.필요/, /contribution/i, /기여/, 
+                /volunteer/i, /자원봉사/
+              ],
+              color: '008672',
+              description: '도움이 필요한 이슈'
+            },
+            'wontfix': {
+              patterns: [
+                /wont.fix/i, /수정.안함/, /reject/i, /거부/, /decline/i, /거절/
+              ],
+              color: 'ffffff',
+              description: '수정하지 않을 이슈'
+            }
+          };
+
+          // 감지된 라벨들
+          const detectedLabels = new Set();
+
+          // 패턴 매칭으로 라벨 감지
+          for (const [labelName, config] of Object.entries(labelDefinitions)) {
+            for (const pattern of config.patterns) {
+              if (pattern.test(title) || pattern.test(body)) {
+                detectedLabels.add(labelName);
+                break;
+              }
+            }
+          }
+
+          // 특별한 조건들
+          // 1. 이슈 번호 기반 자동 우선순위 (예시)
+          if (!Array.from(detectedLabels).some(label => label.startsWith('priority-'))) {
+            // 우선순위가 설정되지 않은 경우 기본값
+            detectedLabels.add('priority-medium');
+          }
+
+          // 2. 복합 라벨 감지
+          if (detectedLabels.has('security') && detectedLabels.has('bug')) {
+            detectedLabels.add('priority-high'); // 보안 버그는 높은 우선순위
+          }
+
+          // 3. 이슈 작성자 기반 라벨
+          const author = issue.user.login;
+          if (author.includes('bot') || author.includes('dependabot')) {
+            detectedLabels.add('dependencies');
+          }
+
+          // 기존 라벨 확인
+          const existingLabels = new Set(issue.labels.map(label => label.name));
+          const newLabels = Array.from(detectedLabels).filter(label => !existingLabels.has(label));
+
+          if (newLabels.length > 0) {
+            // 라벨 생성 (존재하지 않는 경우)
+            for (const labelName of newLabels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  const config = labelDefinitions[labelName] || { color: 'f29513', description: labelName };
+                  try {
+                    await github.rest.issues.createLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      name: labelName,
+                      color: config.color,
+                      description: config.description
+                    });
+                    console.log(`라벨 생성: ${labelName}`);
+                  } catch (createError) {
+                    console.error(`라벨 생성 실패 (${labelName}):`, createError);
+                  }
+                }
+              }
+            }
+
+            // 라벨 추가
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: newLabels
+            });
+
+            // 분석 결과 댓글 작성
+            const categories = {
+              type: newLabels.filter(l => ['bug', 'feature', 'question', 'documentation'].includes(l)),
+              priority: newLabels.filter(l => l.startsWith('priority-')),
+              technical: newLabels.filter(l => ['backend', 'frontend', 'mobile', 'security', 'performance', 'testing'].includes(l)),
+              platform: newLabels.filter(l => ['windows', 'macos', 'linux'].includes(l)),
+              special: newLabels.filter(l => ['good first issue', 'help wanted', 'accessibility'].includes(l))
+            };
+
+            const labelSummary = `
+            ## 🏷️ 자동 라벨 분석 완료
+
+            다음 라벨이 이슈 내용을 분석하여 자동으로 추가되었습니다:
+
+            ${Object.entries(categories).map(([category, labels]) => {
+              if (labels.length === 0) return '';
+              const categoryNames = {
+                type: '📝 이슈 타입',
+                priority: '⚡ 우선순위', 
+                technical: '🔧 기술 영역',
+                platform: '💻 플랫폼',
+                special: '⭐ 특수'
+              };
+              return `### ${categoryNames[category]}\n${labels.map(l => `- \`${l}\``).join('\n')}`;
+            }).filter(Boolean).join('\n\n')}
+
+            ### 📊 분석 기준
+            - **제목 키워드**: ${title.split(' ').slice(0, 5).join(', ')}...
+            - **감지된 패턴**: ${newLabels.length}개
+            - **자동 분류**: ${categories.type.length > 0 ? '성공' : '수동 분류 필요'}
+
+            ${categories.priority.includes('priority-high') ? 
+              '🚨 **높은 우선순위**로 분류되어 신속하게 처리될 예정입니다.' : 
+              '📅 일반적인 처리 일정에 따라 진행됩니다.'
+            }
+
+            ---
+            *라벨은 이슈 제목과 내용을 AI가 분석하여 자동 생성되었습니다. 잘못된 라벨이 있다면 수정해주세요.*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: labelSummary
+            });
+
+            console.log(`이슈 #${issue.number}에 ${newLabels.length}개 라벨 추가: ${newLabels.join(', ')}`);
+          }
+
+    - name: 이슈 템플릿 매칭 및 라벨 검증
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const body = issue.body || '';
+
+          // 이슈 템플릿 감지
+          const templates = {
+            bug_report: {
+              markers: ['재현 단계', 'reproduction steps', '예상 결과', 'expected behavior'],
+              requiredLabels: ['bug'],
+              additionalLabels: ['needs-reproduction']
+            },
+            feature_request: {
+              markers: ['기능 설명', 'feature description', '사용 사례', 'use case'],
+              requiredLabels: ['feature'],
+              additionalLabels: ['needs-review']
+            },
+            question: {
+              markers: ['질문', 'question', '도움', 'help'],
+              requiredLabels: ['question'],
+              additionalLabels: ['needs-answer']
+            }
+          };
+
+          let matchedTemplate = null;
+          let missingInfo = [];
+
+          // 템플릿 매칭
+          for (const [templateName, config] of Object.entries(templates)) {
+            const matchCount = config.markers.filter(marker => 
+              body.toLowerCase().includes(marker.toLowerCase())
+            ).length;
+
+            if (matchCount >= 2) { // 2개 이상 매칭되면 해당 템플릿으로 간주
+              matchedTemplate = templateName;
+              
+              // 필요한 라벨 추가
+              const labelsToAdd = [...config.requiredLabels, ...config.additionalLabels];
+              
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: labelsToAdd
+              });
+              
+              break;
+            }
+          }
+
+          // 템플릿 불일치 또는 정보 부족 감지
+          if (!matchedTemplate) {
+            // 기본 이슈 타입 라벨이 없으면 추가
+            const currentLabels = issue.labels.map(l => l.name);
+            const hasTypeLabel = ['bug', 'feature', 'question', 'documentation'].some(
+              type => currentLabels.includes(type)
+            );
+
+            if (!hasTypeLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['needs-triage']
+              });
+
+              const triageComment = `
+              ## 🔍 이슈 분류 필요
+
+              이 이슈는 자동 분류가 어려워 수동 검토가 필요합니다.
+
+              **권장 조치**:
+              1. 이슈 타입을 명확히 해주세요 (버그, 기능 요청, 질문 등)
+              2. 관련 템플릿에 따라 추가 정보를 제공해주세요
+              3. 적절한 라벨을 수동으로 추가해주세요
+
+              **템플릿 링크**:
+              - [버그 리포트](.github/ISSUE_TEMPLATE/bug_report.md)
+              - [기능 요청](.github/ISSUE_TEMPLATE/feature_request.md)
+              - [질문](.github/ISSUE_TEMPLATE/question.md)
+
+              ---
+              *이슈 분류 지원 시스템*
+              `;
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: triageComment
+              });
+            }
+          }
+
+    - name: 라벨 기반 자동 프로젝트 추가
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const labels = issue.labels.map(label => label.name);
+
+          // 프로젝트 매핑 (실제 프로젝트 ID로 변경 필요)
+          const projectMappings = {
+            'bug': 'Bug Tracking Board',
+            'feature': 'Feature Development',
+            'security': 'Security Issues',
+            'priority-high': 'Urgent Tasks',
+            'backend': 'Backend Development',
+            'frontend': 'Frontend Development'
+          };
+
+          // GitHub Projects API를 사용한 자동 추가 (예시)
+          for (const label of labels) {
+            if (projectMappings[label]) {
+              console.log(`이슈를 "${projectMappings[label]}" 프로젝트에 추가를 시도합니다.`);
+              // 실제 프로젝트 추가 로직은 프로젝트 설정에 따라 구현
+            }
+          } 

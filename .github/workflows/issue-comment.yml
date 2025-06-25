@@ -1,0 +1,331 @@
+name: 이슈 자동 댓글
+
+on:
+  issues:
+    types: [opened, edited, labeled, assigned]
+  issue_comment:
+    types: [created]
+
+jobs:
+  welcome-comment:
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+    - name: 이슈 환영 댓글 작성
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const issue = context.payload.issue;
+          const author = issue.user.login;
+
+          // 이슈 타입 감지
+          const title = issue.title.toLowerCase();
+          const body = (issue.body || '').toLowerCase();
+          
+          let issueType = '';
+          let template = '';
+          let additionalInfo = '';
+
+          // 이슈 타입별 맞춤 메시지
+          if (title.includes('[bug]') || title.includes('bug') || body.includes('버그')) {
+            issueType = '🐛 버그 리포트';
+            template = `
+            ## 버그 리포트 체크리스트
+            다음 정보가 포함되어 있는지 확인해주세요:
+            - [ ] 버그 재현 단계
+            - [ ] 예상 결과 vs 실제 결과
+            - [ ] 환경 정보 (OS, 브라우저, 버전 등)
+            - [ ] 스크린샷 (해당하는 경우)
+            - [ ] 관련 로그나 에러 메시지
+
+            ## 다음 단계
+            1. 개발팀이 이슈를 검토합니다
+            2. 우선순위가 설정됩니다
+            3. 수정 작업이 시작됩니다
+            `;
+          } else if (title.includes('[feature]') || title.includes('feature') || body.includes('기능')) {
+            issueType = '✨ 기능 요청';
+            template = `
+            ## 기능 요청 체크리스트
+            다음 정보가 포함되어 있는지 확인해주세요:
+            - [ ] 요청하는 기능의 명확한 설명
+            - [ ] 해당 기능이 필요한 이유
+            - [ ] 기대하는 사용자 경험
+            - [ ] 가능한 대안 솔루션 고려
+
+            ## 검토 프로세스
+            1. 제품팀이 요청을 검토합니다
+            2. 기술적 타당성을 평가합니다
+            3. 우선순위와 일정을 결정합니다
+            `;
+          } else if (title.includes('[question]') || title.includes('question') || body.includes('질문')) {
+            issueType = '❓ 질문';
+            template = `
+            ## 질문 답변 안내
+            - 개발팀이 최대한 빠르게 답변드리겠습니다
+            - 추가 정보가 필요한 경우 댓글로 요청드릴 수 있습니다
+            - [문서](https://github.com/${context.repo.owner}/${context.repo.repo}/docs)도 참고해보세요
+
+            ## 유용한 링크
+            - [FAQ](https://github.com/${context.repo.owner}/${context.repo.repo}/wiki/FAQ)
+            - [API 문서](https://github.com/${context.repo.owner}/${context.repo.repo}/docs/api)
+            - [예제 코드](https://github.com/${context.repo.owner}/${context.repo.repo}/examples)
+            `;
+          } else {
+            issueType = '📝 일반 이슈';
+            template = `
+            ## 이슈 처리 안내
+            이슈를 등록해주셔서 감사합니다. 적절한 라벨과 담당자가 자동으로 할당됩니다.
+
+            ## 추가 정보 필요 시
+            더 자세한 정보가 필요한 경우 댓글로 요청드릴 수 있습니다.
+            `;
+          }
+
+          const welcomeMessage = `
+          👋 안녕하세요 @${author}님!
+
+          **${issueType}**를 등록해주셔서 감사합니다.
+
+          ${template}
+
+          ## 🔔 알림
+          - 이슈에 라벨과 담당자가 자동으로 할당됩니다
+          - 진행 상황은 이 이슈에서 업데이트됩니다
+          - 추가 질문이 있으시면 언제든 댓글을 남겨주세요
+
+          ---
+          *이 댓글은 자동으로 생성되었습니다.*
+          `;
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: welcomeMessage
+          });
+
+  label-comment:
+    if: github.event_name == 'issues' && github.event.action == 'labeled'
+    runs-on: ubuntu-latest
+    steps:
+    - name: 라벨별 안내 댓글 작성
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const label = context.payload.label;
+          const labelName = label.name;
+
+          let commentMessage = '';
+
+          // 라벨별 맞춤 메시지
+          const labelMessages = {
+            'bug': {
+              icon: '🐛',
+              message: '버그로 확인되었습니다.',
+              action: '개발팀이 우선순위에 따라 수정 작업을 진행할 예정입니다.'
+            },
+            'enhancement': {
+              icon: '✨',
+              message: '기능 개선 요청으로 분류되었습니다.',
+              action: '제품팀이 검토 후 개발 일정에 반영할 예정입니다.'
+            },
+            'question': {
+              icon: '❓',
+              message: '질문으로 분류되었습니다.',
+              action: '지원팀이 빠른 시일 내에 답변드리겠습니다.'
+            },
+            'documentation': {
+              icon: '📚',
+              message: '문서 관련 이슈로 분류되었습니다.',
+              action: '기술 문서팀이 검토하여 업데이트할 예정입니다.'
+            },
+            'good first issue': {
+              icon: '🌟',
+              message: '초보자도 기여할 수 있는 이슈로 표시되었습니다.',
+              action: '새로운 기여자분들의 참여를 기다리고 있습니다!'
+            },
+            'help wanted': {
+              icon: '🙋‍♂️',
+              message: '커뮤니티의 도움이 필요한 이슈입니다.',
+              action: '기여에 관심이 있으시다면 댓글로 의사를 표현해주세요.'
+            },
+            'priority-high': {
+              icon: '🔥',
+              message: '높은 우선순위로 설정되었습니다.',
+              action: '최우선으로 처리될 예정입니다.'
+            },
+            'wontfix': {
+              icon: '🚫',
+              message: '수정하지 않기로 결정되었습니다.',
+              action: '결정 사유는 추가 댓글에서 확인하실 수 있습니다.'
+            },
+            'duplicate': {
+              icon: '🔄',
+              message: '중복 이슈로 확인되었습니다.',
+              action: '원본 이슈를 참고해주세요.'
+            }
+          };
+
+          if (labelMessages[labelName]) {
+            const config = labelMessages[labelName];
+            commentMessage = `
+            ## ${config.icon} 라벨 업데이트: \`${labelName}\`
+
+            ${config.message}
+
+            **다음 조치**: ${config.action}
+
+            ---
+            *라벨 변경에 따른 자동 알림입니다.*
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentMessage
+            });
+          }
+
+  assigned-comment:
+    if: github.event_name == 'issues' && github.event.action == 'assigned'
+    runs-on: ubuntu-latest
+    steps:
+    - name: 담당자 할당 댓글 작성
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const assignee = context.payload.assignee;
+          const assigneeName = assignee.login;
+
+          const commentMessage = `
+          ## 👥 담당자 할당
+
+          @${assigneeName}님이 이 이슈의 담당자로 할당되었습니다.
+
+          **담당자 역할**:
+          - 이슈 상세 분석 및 해결 방안 검토
+          - 진행 상황 업데이트
+          - 필요시 추가 정보 요청
+
+          **예상 응답 시간**: 영업일 기준 2일 이내
+
+          질문이나 추가 정보가 있으시면 언제든 댓글을 남겨주세요!
+
+          ---
+          *담당자 할당 자동 알림입니다.*
+          `;
+
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: commentMessage
+          });
+
+  stale-comment:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 오래된 이슈 확인 및 댓글
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            sort: 'updated',
+            direction: 'asc',
+            per_page: 100
+          });
+
+          for (const issue of issues) {
+            const updatedAt = new Date(issue.updated_at);
+            
+            if (updatedAt < thirtyDaysAgo && !issue.pull_request) {
+              // stale 라벨 확인
+              const hasStaleLabel = issue.labels.some(label => label.name === 'stale');
+              
+              if (!hasStaleLabel) {
+                // stale 라벨 추가
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['stale']
+                });
+
+                // stale 댓글 추가
+                const staleMessage = `
+                ## ⏰ 오래된 이슈 알림
+
+                이 이슈는 30일 동안 활동이 없어 \`stale\` 라벨이 추가되었습니다.
+
+                **다음 조치**:
+                - 이슈가 여전히 유효하다면 댓글을 남겨주세요
+                - 추가 정보나 업데이트가 있다면 공유해주세요
+                - 14일 후에도 활동이 없으면 자동으로 닫힐 수 있습니다
+
+                이슈가 해결되었다면 직접 닫아주시거나 댓글로 알려주세요.
+
+                ---
+                *이 메시지는 자동으로 생성되었습니다.*
+                `;
+
+                await github.rest.issues.createComment({
+                  issue_number: issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: staleMessage
+                });
+              }
+            }
+          }
+
+  comment-reaction:
+    if: github.event_name == 'issue_comment' && github.event.action == 'created'
+    runs-on: ubuntu-latest
+    steps:
+    - name: 댓글에 자동 반응 추가
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const comment = context.payload.comment;
+          const commentBody = comment.body.toLowerCase();
+
+          // 감사 표현에 하트 반응
+          if (commentBody.includes('감사') || commentBody.includes('고마워') || 
+              commentBody.includes('thank') || commentBody.includes('thanks')) {
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+              content: 'heart'
+            });
+          }
+
+          // 해결됨 표시에 축하 반응
+          if (commentBody.includes('해결') || commentBody.includes('완료') || 
+              commentBody.includes('fixed') || commentBody.includes('resolved')) {
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+              content: 'hooray'
+            });
+          }
+
+          // 질문에 눈 반응
+          if (commentBody.includes('?') || commentBody.includes('질문') || 
+              commentBody.includes('궁금') || commentBody.includes('question')) {
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+              content: 'eyes'
+            });
+          } 
