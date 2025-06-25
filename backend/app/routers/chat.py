@@ -16,9 +16,6 @@ async def chat(request: ChatRequest):
     - **message**: 사용자의 입력 메시지
     """
     try:
-        # 의도적인 버그: undefined_variable 참조
-        print(undefined_variable)  # NameError 발생 예정
-        
         # AI 에이전트를 통한 상품 검색
         search_result = search_products(request.message)
         
