@@ -1,12 +1,15 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
 python-dotenv
 pytest
+pytest-asyncio
 httpx
 langgraph
 langchain
+langchain-core
 langchain-community
 langchain-google-genai
+langchain-mcp-adapters
 langsmith
-duckduckgo-search
+python-multipart
